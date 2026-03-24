@@ -1,7 +1,7 @@
 const canvas = document.getElementById('storyCanvas');
 const ctx = canvas.getContext('2d');
 let coverImage = new Image();
-coverImage.crossOrigin = "Anonymous"; // 브라우저 면역 체계 통과 설정
+coverImage.crossOrigin = "Anonymous"; // 브라우저 보안 검역 통과 설정
 const TTB_KEY = 'ttbtwinwhee0938001';
 
 async function searchBook() {
@@ -30,15 +30,19 @@ async function searchBook() {
                 item.onclick = () => {
                     const highRes = book.cover.replace('coversum/', 'cover500/');
                     
-                    // fetch 대신 이미지 객체에 직접 주소 대입 (보안 우회)
+                    // 핵심 수정: 이미지 전용 프록시 wsrv.nl 사용 (가장 안정적)
+                    const imageProxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(highRes)}`;
+                    
                     coverImage.onload = () => { 
                         resultsDiv.style.display = 'none'; 
                         draw(); 
                     };
                     coverImage.onerror = () => {
-                        alert("이미지를 불러오는 데 실패했습니다. 보안 정책 때문일 수 있습니다.");
+                        alert("이미지를 불러오는 데 실패했습니다. 네트워크 상태를 확인해 주세요.");
                     };
-                    coverImage.src = highRes; 
+                    
+                    // 프록시 주소를 이미지 소스로 지정
+                    coverImage.src = imageProxyUrl; 
                     
                     document.getElementById('bookTitleInput').value = book.title;
                     document.getElementById('bookAuthorInput').value = book.author.split('(지은이)')[0];
@@ -46,7 +50,10 @@ async function searchBook() {
                 resultsDiv.appendChild(item);
             });
         } else { resultsDiv.innerHTML = '<div style="padding:10px;">결과 없음</div>'; }
-    } catch (e) { console.error("Search Error:", e); }
+    } catch (e) { 
+        console.error("Search Error:", e);
+        resultsDiv.innerHTML = '<div style="padding:10px;">검색 서버 일시 오류</div>';
+    }
 }
 
 function updateFontSize(val) { document.getElementById('fontSizeVal').innerText = val; draw(); }
@@ -64,7 +71,8 @@ function applyPalette() {
         
         const pixels = tCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height).data;
         const colors = {};
-        for (let i = 0; i < pixels.length; i += 100) { // 샘플링 간격 조절로 성능 향상
+        // 픽셀 샘플링 (성능과 정확도의 균형)
+        for (let i = 0; i < pixels.length; i += 200) { 
             const rgb = `${pixels[i]},${pixels[i+1]},${pixels[i+2]}`;
             colors[rgb] = (colors[rgb] || 0) + 1;
         }
@@ -81,7 +89,8 @@ function applyPalette() {
         document.getElementById('textColor').value = (r*299 + g*587 + b*114)/1000 > 128 ? "#000000" : "#ffffff";
         draw();
     } catch (e) {
-        alert("이미지 보안 정책(CORS)으로 인해 색상을 추출할 수 없습니다. 수동으로 설정해주세요.");
+        console.error(e);
+        alert("이미지 보안 정책으로 인해 색상을 추출할 수 없습니다.");
     }
 }
 
@@ -98,6 +107,7 @@ function draw() {
         const yPosRatio = parseFloat(document.getElementById('textYPos').value);
         const lineFactor = parseFloat(document.getElementById('lineHeightRange').value);
 
+        // 배경 그리기
         const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
         grad.addColorStop(0, c1); grad.addColorStop(1, c2);
         ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -107,13 +117,12 @@ function draw() {
         const maxWidth = 850;
         const xStart = (canvas.width - maxWidth) / 2;
         
+        // 문장 줄바꿈 로직
         const paragraphs = text.split('\n');
         let allLines = [];
-        
         paragraphs.forEach(p => {
             const trimmedP = p.replace(/\s+/g, ' ').trim();
             if (trimmedP === "") { allLines.push({ chars: [], isLast: true }); return; }
-            
             let currentLineChars = [];
             for (let i = 0; i < trimmedP.length; i++) {
                 let char = trimmedP[i];
@@ -134,6 +143,7 @@ function draw() {
         const totalH = allLines.length * lineHeight;
         let currentY = (canvas.height * yPosRatio) - (totalH / 2) + fontSize;
 
+        // 문장 출력 (양끝 정렬 포함)
         ctx.textAlign = 'left';
         allLines.forEach(lineObj => {
             const chars = lineObj.chars;
@@ -152,6 +162,7 @@ function draw() {
             currentY += lineHeight;
         });
 
+        // 표지 이미지 및 정보 출력
         const baseMargin = 115; 
         const coverW = 260;
         if (coverImage.src && coverImage.complete) {
@@ -163,9 +174,7 @@ function draw() {
                 ctx.drawImage(coverImage, coverX, coverY, coverW, coverH);
                 ctx.shadowBlur = 0;
                 drawBookInfo(coverX - 40, canvas.height - baseMargin);
-            } catch (e) {
-                drawBookInfo(canvas.width - 100, canvas.height - baseMargin);
-            }
+            } catch (e) { drawBookInfo(canvas.width - 100, canvas.height - baseMargin); }
         } else { drawBookInfo(canvas.width - 100, canvas.height - baseMargin); }
 
         function drawBookInfo(x, y) {
