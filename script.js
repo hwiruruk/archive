@@ -11,54 +11,24 @@ async function searchBook() {
     resultsDiv.innerHTML = '<div style="padding:10px;">검색 중...</div>';
     resultsDiv.style.display = 'block';
 
-    const apiUrl = `https://www.aladin.co.kr/ttb/api/ItemSearch.aspx?ttbkey=${TTB_KEY}&Query=${encodeURIComponent(query)}&QueryType=Title&MaxResults=5&start=1&SearchTarget=Book&output=js&Version=20131101`;
-
-    // 단일 프록시(allorigins) 가 자주 지연/다운되어 여러 프록시를 순차 시도합니다.
-    const proxies = [
-        { url: `https://corsproxy.io/?${encodeURIComponent(apiUrl)}`, wrapped: false },
-        { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(apiUrl)}`, wrapped: false },
-        { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`, wrapped: false },
-        { url: `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`, wrapped: true },
-    ];
-
-    const fetchWithTimeout = (url, ms) => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), ms);
-        return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
-    };
+    const apiUrl = `https://www.aladin.co.kr/ttb/api/ItemSearch.aspx?ttbkey=${TTB_KEY}&Query=${encodeURIComponent(query)}&QueryType=Keyword&MaxResults=15&start=1&SearchTarget=Book&output=js&Version=20131101`;
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`;
 
     try {
-        let data = null;
-        let lastError = null;
-        for (const proxy of proxies) {
-            try {
-                const response = await fetchWithTimeout(proxy.url, 7000);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                let content;
-                if (proxy.wrapped) {
-                    const rawData = await response.json();
-                    content = (rawData.contents || '').trim();
-                } else {
-                    content = (await response.text()).trim();
-                }
-                if (content.endsWith(';')) content = content.substring(0, content.length - 1);
-                data = JSON.parse(content);
-                break;
-            } catch (err) {
-                lastError = err;
-                console.warn(`Proxy failed (${proxy.url}):`, err);
-            }
-        }
-        if (!data) throw lastError || new Error('All proxies failed');
+        const response = await fetch(proxyUrl);
+        const rawData = await response.json();
+        let content = rawData.contents.trim();
+        if (content.endsWith(';')) content = content.substring(0, content.length - 1);
+        const data = JSON.parse(content);
 
         resultsDiv.innerHTML = '';
         if (data.item && data.item.length > 0) {
             data.item.forEach(book => {
                 const item = document.createElement('div');
                 item.className = 'search-item';
-                item.innerHTML = `<img src="${book.cover}"><div class="info"><b>${book.title}</b><br>${book.author}</div>`;
+                item.innerHTML = `<img src="${book.cover}"><div class="info"><b>${book.title.replace(/<[^>]*>?/gm, '')}</b><br>${book.author}</div>`;
                 item.onclick = () => {
-                    const highRes = book.cover.replace('coversum/', 'cover500/');
+                    const highRes = book.cover.replace('coversum', 'cover500');
                     
                     // 이미지 전용 프록시 wsrv.nl 사용 (CORS 에러 완벽 방지)
                     const imageProxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(highRes)}`;
