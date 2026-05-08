@@ -11,16 +11,45 @@ async function searchBook() {
     resultsDiv.innerHTML = '<div style="padding:10px;">검색 중...</div>';
     resultsDiv.style.display = 'block';
 
-    // API 검색은 텍스트 데이터이므로 allorigins를 사용해도 무방합니다.
     const apiUrl = `https://www.aladin.co.kr/ttb/api/ItemSearch.aspx?ttbkey=${TTB_KEY}&Query=${encodeURIComponent(query)}&QueryType=Title&MaxResults=5&start=1&SearchTarget=Book&output=js&Version=20131101`;
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`;
+
+    // 단일 프록시(allorigins) 가 자주 지연/다운되어 여러 프록시를 순차 시도합니다.
+    const proxies = [
+        { url: `https://corsproxy.io/?${encodeURIComponent(apiUrl)}`, wrapped: false },
+        { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(apiUrl)}`, wrapped: false },
+        { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`, wrapped: false },
+        { url: `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`, wrapped: true },
+    ];
+
+    const fetchWithTimeout = (url, ms) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), ms);
+        return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+    };
 
     try {
-        const response = await fetch(proxyUrl);
-        const rawData = await response.json();
-        let content = rawData.contents.trim();
-        if (content.endsWith(';')) content = content.substring(0, content.length - 1);
-        const data = JSON.parse(content);
+        let data = null;
+        let lastError = null;
+        for (const proxy of proxies) {
+            try {
+                const response = await fetchWithTimeout(proxy.url, 7000);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                let content;
+                if (proxy.wrapped) {
+                    const rawData = await response.json();
+                    content = (rawData.contents || '').trim();
+                } else {
+                    content = (await response.text()).trim();
+                }
+                if (content.endsWith(';')) content = content.substring(0, content.length - 1);
+                data = JSON.parse(content);
+                break;
+            } catch (err) {
+                lastError = err;
+                console.warn(`Proxy failed (${proxy.url}):`, err);
+            }
+        }
+        if (!data) throw lastError || new Error('All proxies failed');
 
         resultsDiv.innerHTML = '';
         if (data.item && data.item.length > 0) {
