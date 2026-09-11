@@ -2,7 +2,29 @@ const canvas = document.getElementById('storyCanvas');
 const ctx = canvas.getContext('2d');
 let coverImage = new Image();
 coverImage.crossOrigin = "Anonymous"; // 보안 경계 통과 설정
-const TTB_KEY = 'ttbtwinwhee0938002';
+
+// 예스24 Open API는 X-Api-Key 헤더 인증이라 브라우저에서 직접 호출할 수 없다.
+// API Key는 절대 여기 두지 않고, 사용자가 배포한 Cloudflare Worker(프록시)의
+// URL만 localStorage에 저장해 둔다. 배포 방법: tools/yes24-proxy/README.md
+const YES24_PROXY_KEY = 'yes24ProxyUrl';
+
+// 예스24 프록시 Worker URL 설정. API Key 자체는 절대 여기 저장하지 않고,
+// Worker 환경변수에만 둔다. 배포 방법: tools/yes24-proxy/README.md
+function configureYes24Proxy() {
+    const current = localStorage.getItem(YES24_PROXY_KEY) || '';
+    const input = prompt(
+        '책 검색을 쓰려면 Cloudflare Worker 프록시 URL이 필요합니다.\n' +
+        '(예스24 Open API는 서버 인증 방식이라 브라우저에서 직접 호출할 수 없습니다.)\n' +
+        '아직 Worker가 없다면 tools/yes24-proxy/README.md를 참고해 배포하세요.\n\n' +
+        'Worker URL (예: https://yes24-proxy.내계정.workers.dev):',
+        current
+    );
+    if (input === null) return; // 취소
+    const url = input.trim().replace(/\/+$/, '');
+    if (url) localStorage.setItem(YES24_PROXY_KEY, url);
+    else localStorage.removeItem(YES24_PROXY_KEY);
+    alert(url ? '저장되었습니다.' : '설정이 삭제되었습니다.');
+}
 
 async function searchBook() {
     const query = document.getElementById('bookSearch').value;
@@ -11,15 +33,17 @@ async function searchBook() {
     resultsDiv.innerHTML = '<div style="padding:10px;">검색 중...</div>';
     resultsDiv.style.display = 'block';
 
-    const apiUrl = `https://www.aladin.co.kr/ttb/api/ItemSearch.aspx?ttbkey=${TTB_KEY}&Query=${encodeURIComponent(query)}&QueryType=Title&MaxResults=5&start=1&SearchTarget=Book&output=js&Version=20131101`;
+    const proxyUrl = (localStorage.getItem(YES24_PROXY_KEY) || '').trim().replace(/\/+$/, '');
+    if (!proxyUrl) {
+        resultsDiv.innerHTML = '<div style="padding:10px;">예스24 프록시 Worker URL이 설정되지 않았습니다. ⚙️ 예스24 설정 버튼으로 등록해주세요.</div>';
+        return;
+    }
 
-    // 단일 프록시(allorigins) 가 자주 지연/다운되어 여러 프록시를 순차 시도합니다.
-    const proxies = [
-        { url: `https://corsproxy.io/?${encodeURIComponent(apiUrl)}`, wrapped: false },
-        { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(apiUrl)}`, wrapped: false },
-        { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`, wrapped: false },
-        { url: `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`, wrapped: true },
-    ];
+    // 예스24 Open API는 X-Api-Key 헤더 인증이라 브라우저가 직접 부를 수 없으므로,
+    // 사용자가 배포한 Cloudflare Worker(프록시)를 거쳐 호출한다. Worker가 대신
+    // X-Api-Key를 붙여 https://apis.yes24.com/v1/goods/itemList 를 호출해 준다.
+    const params = new URLSearchParams({ query, category: 'BOOK', pageSize: '5', detail: 'N' });
+    const apiUrl = `${proxyUrl}/goods/itemList?${params.toString()}`;
 
     const fetchWithTimeout = (url, ms) => {
         const controller = new AbortController();
@@ -28,59 +52,46 @@ async function searchBook() {
     };
 
     try {
-        let data = null;
-        let lastError = null;
-        for (const proxy of proxies) {
-            try {
-                const response = await fetchWithTimeout(proxy.url, 7000);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                let content;
-                if (proxy.wrapped) {
-                    const rawData = await response.json();
-                    content = (rawData.contents || '').trim();
-                } else {
-                    content = (await response.text()).trim();
-                }
-                if (content.endsWith(';')) content = content.substring(0, content.length - 1);
-                data = JSON.parse(content);
-                break;
-            } catch (err) {
-                lastError = err;
-                console.warn(`Proxy failed (${proxy.url}):`, err);
-            }
+        const response = await fetchWithTimeout(apiUrl, 7000);
+        const body = await response.json();
+        if (!body || body.success !== true) {
+            throw new Error(body?.message || `HTTP ${response.status}`);
         }
-        if (!data) throw lastError || new Error('All proxies failed');
+        const items = (body.data && body.data.items) || [];
 
         resultsDiv.innerHTML = '';
-        if (data.item && data.item.length > 0) {
-            data.item.forEach(book => {
+        if (items.length > 0) {
+            items.forEach(i => {
+                const book = {
+                    title: (i.title || '').replace(/<[^>]*>?/gm, ''),
+                    author: (i.author || '').replace(/<[^>]*>?/gm, ''),
+                    cover: i.cover || '',
+                };
                 const item = document.createElement('div');
                 item.className = 'search-item';
                 item.innerHTML = `<img src="${book.cover}"><div class="info"><b>${book.title}</b><br>${book.author}</div>`;
                 item.onclick = () => {
-                    const highRes = book.cover.replace('coversum/', 'cover500/');
-                    
                     // 이미지 전용 프록시 wsrv.nl 사용 (CORS 에러 완벽 방지)
-                    const imageProxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(highRes)}`;
-                    
-                    coverImage.onload = () => { 
-                        resultsDiv.style.display = 'none'; 
-                        draw(); 
+                    const imageProxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(book.cover)}`;
+
+                    coverImage.onload = () => {
+                        resultsDiv.style.display = 'none';
+                        draw();
                     };
                     coverImage.onerror = () => {
                         alert("이미지를 불러오는 데 실패했습니다. 잠시 후 다시 시도해 주세요.");
                     };
-                    
+
                     // 프록시 주소를 바로 삽입하여 보안 검역 우회
-                    coverImage.src = imageProxyUrl; 
-                    
+                    coverImage.src = imageProxyUrl;
+
                     document.getElementById('bookTitleInput').value = book.title;
                     document.getElementById('bookAuthorInput').value = book.author.split('(지은이)')[0];
                 };
                 resultsDiv.appendChild(item);
             });
         } else { resultsDiv.innerHTML = '<div style="padding:10px;">결과 없음</div>'; }
-    } catch (e) { 
+    } catch (e) {
         console.error("Search Error:", e);
         resultsDiv.innerHTML = '<div style="padding:10px;">서버 응답 지연 (다시 시도해 주세요)</div>';
     }

@@ -32,7 +32,10 @@
     <div class="controls">
         <h2>문장 아카이브</h2>
         <div class="group">
-            <label>책 검색</label>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <label>책 검색</label>
+                <button type="button" class="btn-mini" style="flex: 0 0 auto; padding: 4px 8px;" onclick="configureYes24Proxy()">⚙️ 예스24 설정</button>
+            </div>
             <input type="text" id="bookSearch" placeholder="제목/저자 입력 후 엔터" onkeypress="if(event.keyCode==13) searchBook()">
             <div id="search-results"></div>
         </div>
